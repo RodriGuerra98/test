@@ -491,7 +491,8 @@ public class WarehouseTest {
 				return null;
 			}
 			for(DepartureTime departure: departures) {
-				if(departure.getWarehouse().equals(cpFinal.getWarehouse())  && departure.getTargetState().equals(cpFinal.getTargetState()) ) { //
+				if(departure.getWarehouse().equals(cpFinal.getWarehouse())  
+						&& departure.getTargetState().equals(cpFinal.getTargetState()) ) { 
 					List<ShippingHour>shHours = departure.getShippingHours();
 					for(ShippingHour shAux : shHours) {
 						try {
@@ -517,16 +518,13 @@ public class WarehouseTest {
 					}
 				}
 			}
-			
 			listaShip.add(shipFinal);
-			
 			for(ShipmentInfo s : listaShip) {
 				if(finalShipment == null || finalShipment.getTotalPrice() > s.getTotalPrice()) {
 					finalShipment = s;
 				}
 			}
 		}
-
       return finalShipment;
     }
 
