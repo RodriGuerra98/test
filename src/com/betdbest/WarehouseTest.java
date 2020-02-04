@@ -457,7 +457,6 @@ public class WarehouseTest {
       if (availableWarehouses.size() == 0) {
         throw new NoSuitableWarehouseException(order.getItemId(), order.getTargetState());
       }
-
       BoxType boxType = findBestBoxType(order);
       ShipmentInfo info = findBestRoute(availableWarehouses, order, boxType);
 
@@ -471,130 +470,149 @@ public class WarehouseTest {
     
     private ShipmentInfo findBestRoute(List<Warehouse> warehouses, Order order, BoxType box)
         throws NoSuitableWarehouseException {
-    	List<CarrierPricing> cPs = new ArrayList<>();
-		//Buscamos los cp que envien desde el warehouse al targetState del order
-    	for(Warehouse wh : warehouses) {
-			for(CarrierPricing cp : this.pricings){
-				if(cp.getWarehouse() == wh && cp.getTargetState() == order.getTargetState()) {
-					cPs.add(cp);
-				}
-			}
-		}
-		//Escogemos el CP que tenga el volumePrice mas bajo para enviar
-		int size = cPs.size();
-		CarrierPricing cpFinal = null;
-		for (int i =0 ; i < size ; i++) {
-			for(int j=1; j<(size-i);j++) {
-				if( cPs.get(j-1).getVolumePrice() > cPs.get(j).getVolumePrice()) {
-					cpFinal = cPs.get(j-1);
-				}
-			}
-		}
-		if(cpFinal != null) {
-			//Buscar el carrierTime
-			int carrierTime;
-			for(CarrierTime crTimes : this.times) {
-				if(cpFinal.getWarehouse() == crTimes.getWarehouse() &&
-						cpFinal.getTargetState() == crTimes.getTargetState() ) {
-					carrierTime = crTimes.getCarrierTime();
-				}	
-			}
+    	List<ShipmentInfo> listaShip = new ArrayList<>();        // Lista de shipmenteInfo para calcular el precio y ver cual es la más barata
+    	ShipmentInfo finalShipment=null;						 // Objeto que vamos a utilizar para almacenar el shipmentInfo más barato
+    	
+    	List<CarrierPricing> cPs = getCPs(warehouses, order);	 // Lista de CarrierPricings disponibles para dichos warehouses y targetState
+    	
+		for(CarrierPricing cpFinal : cPs) {
+			float shippingPrice;								 // Precio de volumen *volumePrice de cada carrierPricings								
+			ShipmentInfo shipInfo;								 // Objeto auxiliar con el que obtener el totalPrice para guardarlo en la lista "listaShip"
+			LocalDateTime guaranteedTm;							 // Fecha necesaria para calcular el ShipmentExperiencePrice
+			ShipmentInfo shipFinal = null;						 // Objeto para sacar el shipmentInfo mas barato dentro de un CarrierPricing
+			List<ShipmentInfo> shipLista = new ArrayList<>();	 // Lista de shipmentInfo para sacar el más barato
 			
-			//precio total
-			float finalPrice;
+			CarrierTime carrierTime = getCarrierTime(cpFinal);   // CarrierTime mas bajo
+			
 			try{
-				finalPrice = (int) (cpFinal.getVolumePrice() * box.getVolume()); 
+				shippingPrice = (float) (cpFinal.getVolumePrice() * box.getVolume()); 
 			}catch(Exception e){
 				System.out.println("Error al operar el precio final");
 				return null;
 			}
-			//Shipping hour
-			
-			//Calculo el guaranteedDeliveryTime
-			LocalDateTime guaranteedTm;
-			try {
-				guaranteedTm = getDeliveryDateTime(order.getOrderDate(), shippingHour, carrierTime);	
-			}catch(Exception e) {
-				System.out.println("Error al calcular el guaranteedTime");
-				return null;
+			for(DepartureTime departure: departures) {
+				if(departure.getWarehouse().equals(cpFinal.getWarehouse())  && departure.getTargetState().equals(cpFinal.getTargetState()) ) { //
+					List<ShippingHour>shHours = departure.getShippingHours();
+					for(ShippingHour shAux : shHours) {
+						try {
+							guaranteedTm = getDeliveryDateTime(order.getOrderDate(), shAux, carrierTime);	
+						}catch(Exception e) {
+							System.out.println("Error al calcular el guaranteedTime");
+							return null;
+						}
+						try {
+							shipInfo = new ShipmentInfo(order, cpFinal.getWarehouse(), guaranteedTm, box.getBoxType(), shippingPrice);
+							shipLista.add(shipInfo);
+						}catch(Exception e) {
+							System.out.println("Error al crear el shipment info");
+							return null;
+						}
+					}
+					int size_t = shipLista.size();					
+					shipFinal = shipLista.get(0);
+					for (int i =1 ; i < size_t ; i++) {
+						if( shipFinal.getTotalPrice() > shipLista.get(i).getTotalPrice()) {
+							shipFinal = shipLista.get(i); 
+						}
+					}
+				}
 			}
 			
-			//Creo el shiInfo a devolver
-			ShipmentInfo shipInfo;
-			try {
-				shipInfo = new ShipmentInfo(order, cpFinal.getWarehouse(), guaranteedTm, box.getBoxType(), finalPrice);
-			}catch(Exception e) {
-				System.out.println("Error al crear el shipment info");
-				return null;
-			}
+			listaShip.add(shipFinal);
 			
-			return shipInfo;
-		
+			for(ShipmentInfo s : listaShip) {
+				if(finalShipment == null || finalShipment.getTotalPrice() > s.getTotalPrice()) {
+					finalShipment = s;
+				}
+			}
 		}
-		
-		
-		
-		
-		
-      return null;
+
+      return finalShipment;
     }
+
+    /*Funcion para coger el menor carrier time que corresponda a los warehouses disponibles y el estado destino*/
+	private CarrierTime getCarrierTime(CarrierPricing cpFinal) {
+		CarrierTime carrierTime=null;
+		for(CarrierTime crTimes : this.times) {
+			if(cpFinal.getWarehouse().equals(crTimes.getWarehouse() )&&
+					cpFinal.getTargetState().equals(crTimes.getTargetState()) ) {
+				if(carrierTime==null || carrierTime.getCarrierTime() > crTimes.getCarrierTime()) {
+					carrierTime = crTimes;
+				}
+			}	
+		}
+		return carrierTime;
+	}
+	
+	/*Funcion para coger la lista de CarrierPricings que corresponda a los warehouses disponibles y el estado destino*/
+	private List<CarrierPricing> getCPs(List<Warehouse> warehouses, Order order) {
+		List<CarrierPricing> cPs = new ArrayList<>();
+		for(Warehouse wh : warehouses) {
+			for(CarrierPricing cp : this.pricings){
+				if(cp.getWarehouse().equals(wh) && cp.getTargetState().equals(order.getTargetState())) {
+					cPs.add(cp);
+				}
+			}
+		}
+		return cPs;
+	}
     
     private BoxType findBestBoxType(Order order) throws NoSuitableBoxException {
     	String itemId;
-    	itemId = order.getItemId();
+    	itemId = order.getItemId();	//Guardamos el itemId en una variable para hacerlo más sencillo
+    	BoxType cajaFinal = null;	//Caja que vamos a seleccionar
     	for(Item item : items) {
-    		if (item.getItemId() == itemId) { 						//Obtenemos el item por el id
-    			int peso;
-    			ArrayList<BoxType> cajasPeso = new ArrayList<>();
-    			peso = item.getWeight();
-    			
-    			for(BoxType caja : boxTypes){ 						// Obtenemos las cajas que aceptan el peso y las añado a una lista
-    				if(caja.getMaxWeight() >= peso) {
-    					cajasPeso.add(caja);
-    				}
-    			}
-    			
+    		if (item.getItemId().equals(itemId)) { 						//Obtenemos el item por el id del order
+    			ArrayList<BoxType> cajasPeso = getBoxesForWeight(item);
     			if(cajasPeso.isEmpty()) {
     				System.out.println("El peso del producto es demasiado grande para las cajas");
-    			}else {                                             //Obtenemos el maximo valor entre ancho y largo para poder girar el producto 90º
+    			}else {                                             
     				int height,width, length;
-    				width   = item.getWidth();
-    				length  = item.getLength();
-    				height  = item.getHeight();
-    				ArrayList<BoxType> cajasDimension = new ArrayList<>();
-        			
-    				/* Opción para que se escoja el mas grande entre el largo y el alto para poder ponerlo vertical
-    				int max =  Math.max(length,height);
+    				width   = item.getWidth();		//Ancho del producto
+    				length  = item.getLength();		//Largo del producto
+    				height  = item.getHeight();		//Alto  del producto
+    
+    				ArrayList<BoxType> cajasDimension = getBoxesForDimension(cajasPeso, height, width, length);    //Lsta de cajas que aceptan la dimension
+    				int size = cajasDimension.size(); //tamaño de la lista
     				
-    				for(BoxType cajaAux: cajasPeso) {
-    					if(cajaAux.getHeight() >= max && cajaAux.getLength() >= max && cajaAux.getWidth() >= width) {
-    						cajasDimension.add(cajaAux);
-    					}
+    				cajaFinal = cajasDimension.get(0); 
+    				for (int i =1 ; i < size ; i++) {
+						if( cajaFinal == null ||cajaFinal.getVolume() > cajasDimension.get(i).getVolume()) {
+							cajaFinal = cajasDimension.get(i);
+						}
     				}
-    				*/
-    				for(BoxType cajaAux: cajasPeso) {
-    					if(cajaAux.getHeight() >= height && cajaAux.getLength() >= length && cajaAux.getWidth() >= width) {
-    						cajasDimension.add(cajaAux);
-    					}
-    				}
-    				
-    				//Me he basado en el algoritmo BubbleSort para ordenar la lista de cajas de menor a mayor pero solo cogiendo el menor
-    				int size = cajasDimension.size();
-    				BoxType cajaFinal;
-    				for (int i =0 ; i < size ; i++) {
-    					for(int j=1; j<(size-i);j++) {
-    						if( cajasDimension.get(j-1).getVolume() > cajasDimension.get(j).getVolume()) {
-    							cajaFinal = cajasDimension.get(j-1);
-    						}
-    					}
-    				}	
-    			}
-    			
-    			
+    			}	
     		}
     	}
-      return null;
+    	
+      return cajaFinal;
     }
+    /*Funcion que devuelve la lista de cajas que pueden almacenar el item por dimension, no distingue entre largo y ancho ya que se puede girar en el plano X*/
+	private ArrayList<BoxType> getBoxesForDimension(ArrayList<BoxType> cajasPeso, int height, int width, int length) {
+		ArrayList<BoxType> cajasDimension = new ArrayList<>();
+		
+		for(BoxType cajaAux: cajasPeso) {
+			if(cajaAux.getHeight() >= height 
+					&& ((cajaAux.getLength() >= length && cajaAux.getWidth() >= width) || (cajaAux.getWidth() >= length && cajaAux.getLength() >= width))) {
+				cajasDimension.add(cajaAux);
+			}
+		}
+		return cajasDimension;
+	}
+	
+	/*Funcion que devuelve la lista de cajas que pueden almacenar el item por peso*/
+	private ArrayList<BoxType> getBoxesForWeight(Item item) {
+		int peso;
+		ArrayList<BoxType> cajasPeso = new ArrayList<>();
+		peso = item.getWeight();
+		
+		for(BoxType caja : boxTypes){ 						// Obtenemos las cajas que aceptan el peso y las añado a una lista
+			if(caja.getMaxWeight() >= peso) {
+				cajasPeso.add(caja);
+			}
+		}
+		return cajasPeso;
+	}
 
     private LocalDateTime getDeliveryDateTime(LocalDateTime orderDate, ShippingHour shippingHour, CarrierTime time) {
       // From this hour we can send the order
@@ -634,6 +652,8 @@ public class WarehouseTest {
       }
     }
   }
+  
+  
 
   public static void main(String[] args) throws IOException {
     List<Stock> stocks = new ArrayList<>();
